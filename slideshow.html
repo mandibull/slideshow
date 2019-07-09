@@ -1,0 +1,189 @@
+<html>
+
+<head>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+        #slideshow {
+            position: absolute;
+            display: block;
+            background: #000000;
+            height: 100%;
+            width: 100%;
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+    <script>
+        "use strict";
+    
+        function getQueryVariable(variable, defaultValue) {
+            let query = window.location.search.substring(1);
+            let vars = query.split('&');
+            for (let i = 0; i < vars.length; i++) {
+                let pair = vars[i].split('=');
+                if (decodeURIComponent(pair[0]) == variable) {
+                    return decodeURIComponent(pair[1]);
+                }
+            }
+            return defaultValue;
+        }
+
+        function setTTLCache(key, value) {
+            const object = {
+                value: value,
+                timestamp: new Date().getTime(),
+            }
+            localStorage.setItem(key, JSON.stringify(object));
+        }
+
+        function getTTLCache(key, ttlSeconds) {
+            const rawObject = localStorage.getItem(key);
+            if (rawObject === null) {
+                return null;
+            }
+            const object = JSON.parse(rawObject);
+            if (typeof ttlSeconds !== 'undefined') {
+                const now = new Date().getTime();
+                if (now > object.timestamp + ttlSeconds * 1000) {
+                    return null;
+                }
+            }
+            return object.value;
+        }
+
+        async function getAlbumPhotoIds(apiEndpoint, apiKey, userId, albumId) {
+            try {
+                const cache = getTTLCache('AlbumPhotoIds-' + userId + '-' + albumId, 60); // 1 min cache
+                if (cache) {
+                    console.info('getAlbumPhotoIds cached result:', cache);
+                    return cache;
+                }
+                const data = await $.ajax(apiEndpoint, {
+                    data: {
+                        method: 'flickr.photosets.getPhotos',
+                        api_key: apiKey,
+                        user_id: userId,
+                        photoset_id: albumId,
+                        format: 'json',
+                    },
+                    jsonp: 'jsoncallback',
+                    dataType: 'jsonp',
+                });
+                let result = [];
+                data.photoset.photo.forEach(function(photo) {
+                    result.push(photo.id);
+                });
+                console.info('getAlbumPhotoIds result:', result);
+                setTTLCache('AlbumPhotoIds-' + userId + '-' + albumId, result)
+                return result;
+            } catch (error) {
+                // TODO: show error on screen
+                console.error(error);
+            }
+        }
+
+        async function getPhotoURL(apiEndpoint, apiKey, photoId) {
+            try {
+                const cache = getTTLCache('PhotoURL-' + photoId);
+                if (cache) {
+                    console.info('getPhotoURL cached result:', cache);
+                    return cache;
+                }
+                const data = await $.ajax(apiEndpoint, {
+                    data: {
+                        method: 'flickr.photos.getSizes',
+                        api_key: apiKey,
+                        photo_id: photoId,
+                        format: 'json',
+                    },
+                    jsonp: 'jsoncallback',
+                    dataType: 'jsonp',
+                });
+                let width = 0;
+                let result = null;
+                data.sizes.size.forEach(function(sizeData) {
+                    let curWidth = sizeData.width;
+                    if (typeof curWidth === "string") {
+                        curWidth = parseInt(curWidth);
+                    }
+                    if (curWidth > width) {
+                        width = curWidth;
+                        result = sizeData.source;
+                    }
+                });
+                console.info('getPhotoURL result:', result);
+                if (result) {
+                    setTTLCache('PhotoURL-' + photoId, result);
+                }
+                return result;
+            } catch (error) {
+                // TODO: show error on screen
+                console.error(error);
+            }
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                let j = Math.floor(Math.random() * (i + 1));
+                let temp = array[i];
+                array[i] = array[j];
+                array[j] = temp;
+            }
+        }
+
+        const apiEndpoint = 'https://www.flickr.com/services/rest';
+        const apiKey = getQueryVariable('apiKey', null);
+        const userId = getQueryVariable('userId', null);
+        const albumId = getQueryVariable('albumId', null);
+        const slideshowTimeMs = parseInt(getQueryVariable('slideshowTime', '5000'));
+
+        const loadURLs = async function() {
+            const photoIDs = await getAlbumPhotoIds(apiEndpoint, apiKey, userId, albumId);
+            let photoURLsPromises = [];
+            photoIDs.forEach(function(photoId) {
+                photoURLsPromises.push(getPhotoURL(apiEndpoint, apiKey, photoId));
+            });
+            const res = await Promise.all(photoURLsPromises);
+            return res;
+        };
+
+        var urls = [];
+        var i = 0;
+
+        function slideshowStep() {
+            if (urls.length <= i) {
+                i = 0;
+            }
+            $('#slideshow').css('background-image', 'url("' + urls[i] + '")');
+            i = i + 1;
+            setTimeout(slideshowStep, slideshowTimeMs);
+        }
+
+        const startSlideshow = async function() {
+            urls = await loadURLs();
+            console.log(urls);
+            if (urls.length == 0) {
+                // TODO: error
+                return;
+            }
+            shuffleArray(urls);
+            slideshowStep();
+        }
+
+        $(function() {
+            startSlideshow();
+        });
+    </script>
+</head>
+
+<body>
+    <div id="slideshow"></div>
+</body>
+
+</html>
