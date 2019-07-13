@@ -2,10 +2,21 @@
 
 <head>
     <style>
-        html, body {
+        html,
+        body {
             margin: 0;
             padding: 0;
             height: 100%;
+        }
+        #imagecache {
+            position: absolute;
+            display: none;
+            background: #000000;
+            height: 100%;
+            width: 100%;
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
         }
         #slideshow {
             position: absolute;
@@ -17,11 +28,36 @@
             background-size: contain;
             background-position: center;
         }
+        #authorize-button {
+            position: absolute;
+            display: block;
+            z-index: 80000;
+            width: 200px;
+            height: 60px;
+        }
+        /* #error {
+            background-image: url("https://static-cdn.jtvnw.net/emoticons/v1/1377826/3.0");
+        } */
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+</head>
+
+<body>
+    <button id="authorize-button">Authorize</button>
+    <div id="imagecache"></div>
+    <div id="slideshow"></div>
     <script>
         "use strict";
-    
+
+        const clientId = '397409082404-fbcnah9mbf7smeki79eomkij01i54rph.apps.googleusercontent.com';
+        const albumId = getQueryVariable('albumId', 'ANvUp4rtRfRK8mYJHaogduWXpe2jRkip_hX14xMqjgbBTr63lgV0m-g');
+        const maxWidth = parseInt(getQueryVariable('maxWidth', '2560'));
+        const maxHeight = parseInt(getQueryVariable('maxHeight', '1440'));
+        const slideshowTimeMs = parseInt(getQueryVariable('slideshowTime', '5000'));
+        const cacheTimeSeconds = parseInt(getQueryVariable('cacheTimeSeconds', '60'));
+
+        var photos = [];
+        var currentPhoto = 0;
+
         function getQueryVariable(variable, defaultValue) {
             let query = window.location.search.substring(1);
             let vars = query.split('&');
@@ -57,75 +93,64 @@
             return object.value;
         }
 
-        async function getAlbumPhotoIds(apiEndpoint, apiKey, userId, albumId) {
-            try {
-                const cache = getTTLCache('AlbumPhotoIds-' + userId + '-' + albumId, 60); // 1 min cache
-                if (cache) {
-                    console.info('getAlbumPhotoIds cached result:', cache);
-                    return cache;
-                }
-                const data = await $.ajax(apiEndpoint, {
-                    data: {
-                        method: 'flickr.photosets.getPhotos',
-                        api_key: apiKey,
-                        user_id: userId,
-                        photoset_id: albumId,
-                        format: 'json',
-                    },
-                    jsonp: 'jsoncallback',
-                    dataType: 'jsonp',
+        function showError(message) {
+            console.error(message);
+            // TODO: do something!
+        }
+
+        function doRequest() {
+            return gapi.client.photoslibrary.mediaItems.search({
+                albumId: albumId,
+                pageSize: 100,
+            }).then(function (resp) {
+                resp.result.mediaItems.forEach(function (item) {
+                    photos.push(item.baseUrl + '=w2560-h1440');
                 });
-                let result = [];
-                data.photoset.photo.forEach(function(photo) {
-                    result.push(photo.id);
-                });
-                console.info('getAlbumPhotoIds result:', result);
-                setTTLCache('AlbumPhotoIds-' + userId + '-' + albumId, result)
-                return result;
-            } catch (error) {
-                // TODO: show error on screen
-                console.error(error);
+                console.log('Number of photos:', photos.length);
+                slideshow();
+            }, function (reason) {
+                console.log('ERROR:', reason);
+            });
+        }
+
+        function updateSigninStatus(isSignedIn) {
+            if (isSignedIn) {
+                doRequest();
+            } else {
+                authorizeButton.style.display = 'block';
             }
         }
 
-        async function getPhotoURL(apiEndpoint, apiKey, photoId) {
-            try {
-                const cache = getTTLCache('PhotoURL-' + photoId);
-                if (cache) {
-                    console.info('getPhotoURL cached result:', cache);
-                    return cache;
-                }
-                const data = await $.ajax(apiEndpoint, {
-                    data: {
-                        method: 'flickr.photos.getSizes',
-                        api_key: apiKey,
-                        photo_id: photoId,
-                        format: 'json',
-                    },
-                    jsonp: 'jsoncallback',
-                    dataType: 'jsonp',
+        function handleAuthClick(event) {
+            gapi.auth2.getAuthInstance().signIn();
+        }
+
+        var authorizeButton = document.getElementById('authorize-button');
+
+        function getPhotos() {
+            const cache = getTTLCache('getPhotoURLs-' + albumId, cacheTimeSeconds);
+            let result = null;
+            if (cache) {
+                console.info('getPhotoURLs cached result:', cache);
+                result = cache;
+            } else {
+                console.log('gapi.client.init');
+                gapi.client.init({
+                    clientId: clientId,
+                    scope: 'https://www.googleapis.com/auth/photoslibrary.readonly',
+                    discoveryDocs: ['https://photoslibrary.googleapis.com/$discovery/rest?version=v1'],
+                }).then(function () {
+                    // Listen for sign-in state changes.
+                    gapi.auth2.getAuthInstance().isSignedIn.listen(updateSigninStatus);
+
+                    // Handle the initial sign-in state.
+                    updateSigninStatus(gapi.auth2.getAuthInstance().isSignedIn.get());
+                    authorizeButton.onclick = handleAuthClick;
+                }, function (reason) {
+                    showError(reason);
                 });
-                let width = 0;
-                let result = null;
-                data.sizes.size.forEach(function(sizeData) {
-                    let curWidth = sizeData.width;
-                    if (typeof curWidth === "string") {
-                        curWidth = parseInt(curWidth);
-                    }
-                    if (curWidth > width) {
-                        width = curWidth;
-                        result = sizeData.source;
-                    }
-                });
-                console.info('getPhotoURL result:', result);
-                if (result) {
-                    setTTLCache('PhotoURL-' + photoId, result);
-                }
-                return result;
-            } catch (error) {
-                // TODO: show error on screen
-                console.error(error);
             }
+            return result;
         }
 
         function shuffleArray(array) {
@@ -137,53 +162,41 @@
             }
         }
 
-        const apiEndpoint = 'https://www.flickr.com/services/rest';
-        const apiKey = getQueryVariable('apiKey', null);
-        const userId = getQueryVariable('userId', null);
-        const albumId = getQueryVariable('albumId', null);
-        const slideshowTimeMs = parseInt(getQueryVariable('slideshowTime', '5000'));
-
-        const loadURLs = async function() {
-            const photoIDs = await getAlbumPhotoIds(apiEndpoint, apiKey, userId, albumId);
-            let photoURLsPromises = [];
-            photoIDs.forEach(function(photoId) {
-                photoURLsPromises.push(getPhotoURL(apiEndpoint, apiKey, photoId));
-            });
-            const res = await Promise.all(photoURLsPromises);
-            return res;
-        };
-
-        var urls = [];
-        var i = 0;
-
         function slideshowStep() {
-            if (urls.length <= i) {
-                i = 0;
+            // Set new photo
+            if (photos.length <= currentPhoto) {
+                currentPhoto = 0;
             }
-            $('#slideshow').css('background-image', 'url("' + urls[i] + '")');
-            i = i + 1;
+            currentPhoto += 1;
+            document.getElementById('slideshow').style.backgroundImage = 'url("' + photos[currentPhoto] + '")';
+
+            // Preload next photo
+            let nextPhoto = currentPhoto + 1;
+            if (photos.length <= nextPhoto) {
+                nextPhoto = 0;
+            }
+            document.getElementById('imagecache').style.backgroundImage = 'url("' + photos[nextPhoto] + '")';
+
             setTimeout(slideshowStep, slideshowTimeMs);
         }
 
-        const startSlideshow = async function() {
-            urls = await loadURLs();
-            console.log(urls);
-            if (urls.length == 0) {
-                // TODO: error
+        function slideshow() {
+            if (photos.length == 0) {
+                showError('No photos found');
                 return;
             }
-            shuffleArray(urls);
+            shuffleArray(photos);
             slideshowStep();
         }
 
-        $(function() {
-            startSlideshow();
-        });
+        function handleClientLoad() {
+            gapi.load('client:auth2', getPhotos);
+        }
     </script>
-</head>
-
-<body>
-    <div id="slideshow"></div>
+    <script async defer src="https://apis.google.com/js/api.js"
+        onload="this.onload=function(){};handleClientLoad()"
+        onreadystatechange="if (this.readyState === 'complete') this.onload()">
+    </script>
 </body>
 
 </html>
