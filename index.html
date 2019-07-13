@@ -6,8 +6,9 @@
             margin: 0;
             padding: 0;
             height: 100%;
+            font-family: Arial, Helvetica, sans-serif;
         }
-        #slideshow {
+        .slideshow {
             position: absolute;
             display: block;
             background: #000000;
@@ -17,11 +18,38 @@
             background-size: contain;
             background-position: center;
         }
+        #prefetch {
+            display: none;
+        }
+        #error {
+            display: none;
+            color: white;
+            font-size: 25px;
+            text-align: left;
+            position: absolute;
+            max-width: 1000px;
+            min-height: 150px;
+            background-image: url("https://static-cdn.jtvnw.net/emoticons/v1/1339393/3.0");
+            background-repeat: no-repeat;
+            background-position: 15 18;
+            padding: 10px 30px 10px 155px;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            -webkit-transform: translate(-50%, -50%);
+            transform: translate(-50%, -50%);
+
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
     <script>
         "use strict";
     
+        function displayError(message) {
+            $('#error').css('display', 'block').text('ERROR: ' + message);
+            console.error(message);
+        }
+
         function getQueryVariable(variable, defaultValue) {
             let query = window.location.search.substring(1);
             let vars = query.split('&');
@@ -57,74 +85,34 @@
             return object.value;
         }
 
-        async function getAlbumPhotoIds(apiEndpoint, apiKey, userId, albumId) {
-            try {
-                const cache = getTTLCache('AlbumPhotoIds-' + userId + '-' + albumId, 60); // 1 min cache
-                if (cache) {
-                    console.info('getAlbumPhotoIds cached result:', cache);
-                    return cache;
-                }
-                const data = await $.ajax(apiEndpoint, {
-                    data: {
-                        method: 'flickr.photosets.getPhotos',
-                        api_key: apiKey,
-                        user_id: userId,
-                        photoset_id: albumId,
-                        format: 'json',
+        function getAlbumPhotoURLs(clientId, albumHash, albumCacheTimeSeconds) {
+            const cache = getTTLCache('getAlbumPhotoURLs-' + albumHash, albumCacheTimeSeconds);
+            if (cache) {
+                console.info('getAlbumPhotoURLs cached result:', cache);
+                photos = cache;
+                startSlideshow();
+            } else {
+                $.ajax({
+                    url: 'https://api.imgur.com/3/album/' + albumHash + '/images',
+                    beforeSend: function (jqXHR, settings) {
+                        jqXHR.setRequestHeader('Authorization', 'Client-ID ' + clientId);
                     },
-                    jsonp: 'jsoncallback',
-                    dataType: 'jsonp',
-                });
-                let result = [];
-                data.photoset.photo.forEach(function(photo) {
-                    result.push(photo.id);
-                });
-                console.info('getAlbumPhotoIds result:', result);
-                setTTLCache('AlbumPhotoIds-' + userId + '-' + albumId, result)
-                return result;
-            } catch (error) {
-                // TODO: show error on screen
-                console.error(error);
-            }
-        }
-
-        async function getPhotoURL(apiEndpoint, apiKey, photoId) {
-            try {
-                const cache = getTTLCache('PhotoURL-' + photoId);
-                if (cache) {
-                    console.info('getPhotoURL cached result:', cache);
-                    return cache;
-                }
-                const data = await $.ajax(apiEndpoint, {
-                    data: {
-                        method: 'flickr.photos.getSizes',
-                        api_key: apiKey,
-                        photo_id: photoId,
-                        format: 'json',
+                    success: function(result) {
+                        photos = [];
+                        result.data.forEach(function(item) {
+                            photos.push(item.link);
+                        });
+                        console.info('getAlbumPhotoURLs result:', photos);
+                        setTTLCache('getAlbumPhotoURLs-' + albumHash, photos);
+                        startSlideshow();
                     },
-                    jsonp: 'jsoncallback',
-                    dataType: 'jsonp',
+                    error: function(xhr, status, error) {
+                        if (xhr.status == 404) {
+                            error = 'not found';
+                        }
+                        displayError('failed to retrieve albumHash ' + albumHash + ': ' + error);
+                    },
                 });
-                let width = 0;
-                let result = null;
-                data.sizes.size.forEach(function(sizeData) {
-                    let curWidth = sizeData.width;
-                    if (typeof curWidth === "string") {
-                        curWidth = parseInt(curWidth);
-                    }
-                    if (curWidth > width) {
-                        width = curWidth;
-                        result = sizeData.source;
-                    }
-                });
-                console.info('getPhotoURL result:', result);
-                if (result) {
-                    setTTLCache('PhotoURL-' + photoId, result);
-                }
-                return result;
-            } catch (error) {
-                // TODO: show error on screen
-                console.error(error);
             }
         }
 
@@ -137,53 +125,48 @@
             }
         }
 
-        const apiEndpoint = 'https://www.flickr.com/services/rest';
-        const apiKey = getQueryVariable('apiKey', null);
-        const userId = getQueryVariable('userId', null);
-        const albumId = getQueryVariable('albumId', null);
-        const slideshowTimeMs = parseInt(getQueryVariable('slideshowTime', '5000'));
+        const clientId = getQueryVariable('apiKey', 'de79b36c22915ea');
+        const albumHash = getQueryVariable('albumHash', '');
+        const albumCacheTimeSeconds = parseInt(getQueryVariable('albumCacheTimeSeconds', '60'));
+        const slideshowTimeSeconds = parseInt(getQueryVariable('slideshowTimeSeconds', '10'));
 
-        const loadURLs = async function() {
-            const photoIDs = await getAlbumPhotoIds(apiEndpoint, apiKey, userId, albumId);
-            let photoURLsPromises = [];
-            photoIDs.forEach(function(photoId) {
-                photoURLsPromises.push(getPhotoURL(apiEndpoint, apiKey, photoId));
-            });
-            const res = await Promise.all(photoURLsPromises);
-            return res;
-        };
-
-        var urls = [];
-        var i = 0;
+        var photos = [];
+        var currentPhotoIndex = 0;
 
         function slideshowStep() {
-            if (urls.length <= i) {
-                i = 0;
+            if (photos.length <= currentPhotoIndex) {
+                currentPhotoIndex = 0;
             }
-            $('#slideshow').css('background-image', 'url("' + urls[i] + '")');
-            i = i + 1;
-            setTimeout(slideshowStep, slideshowTimeMs);
+            $('#slideshow').css('background-image', 'url("' + photos[currentPhotoIndex] + '")');
+            currentPhotoIndex += 1;
+
+            let nextPhotoIndex = currentPhotoIndex;
+            if (photos.length <= nextPhotoIndex) {
+                nextPhotoIndex = 0;
+            }
+            $('#prefetch').css('background-image', 'url("' + photos[nextPhotoIndex] + '")');
+            setTimeout(slideshowStep, slideshowTimeSeconds * 1000);
         }
 
-        const startSlideshow = async function() {
-            urls = await loadURLs();
-            console.log(urls);
-            if (urls.length == 0) {
-                // TODO: error
+        function startSlideshow() {
+            if (photos.length == 0) {
+                displayError('Album is empty');
                 return;
             }
-            shuffleArray(urls);
+            shuffleArray(photos);
             slideshowStep();
         }
 
         $(function() {
-            startSlideshow();
+            getAlbumPhotoURLs(clientId, albumHash, albumCacheTimeSeconds);
         });
     </script>
 </head>
 
 <body>
-    <div id="slideshow"></div>
+    <div id="slideshow" class="slideshow"></div>
+    <div id="prefetch" class="slideshow"></div>
+    <div id="error"></div>
 </body>
 
 </html>
