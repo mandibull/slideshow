@@ -274,7 +274,7 @@
             albumNames.forEach(function(albumName) {
                 let albumURL = new URL(document.location);
                 albumURL.search = '?slideshowTimeSeconds=' + slideshowTimeSeconds + '&albumName=' + albumName;
-                const $a = $('<a>').attr('href', albumURL.href).text(albumName);
+                const $a = $('<a>').attr('target', '_blank').attr('href', albumURL.href).text(albumName);
                 const $li = $('<li>').append($a);
                 $('#albumList').append($li);
             });
