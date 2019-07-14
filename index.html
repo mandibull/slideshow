@@ -1,12 +1,18 @@
+<!doctype html>
 <html>
 
 <head>
+    <title>Mandibull Slideshow</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <meta charset="UTF-8">
     <style>
         html, body {
             margin: 0;
             padding: 0;
             height: 100%;
             font-family: Arial, Helvetica, sans-serif;
+            color: white;
+            font-size: 25px;
         }
         .slideshow {
             position: absolute;
@@ -23,9 +29,6 @@
         }
         #error {
             display: none;
-            color: white;
-            font-size: 25px;
-            text-align: left;
             position: absolute;
             max-width: 1000px;
             min-height: 150px;
@@ -38,16 +41,160 @@
             left: 50%;
             -webkit-transform: translate(-50%, -50%);
             transform: translate(-50%, -50%);
-
+        }
+        #albums {
+            display: none;
+            position: absolute;
+            width: 100%;
+            height: 100%;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dropbox.js/4.0.28/Dropbox-sdk.min.js"></script>
     <script>
         "use strict";
-    
+
+        const albumName = getQueryVariable('albumName', '');
+        var slideshowTimeSeconds = parseInt(getQueryVariable('slideshowTimeSeconds', '10'));
+        var albumNames = [];
+        var dropboxPhotoPaths = [];
+        var photoCache = [];
+        var currentPhotoIndex = 0;
+
+        const isVisible = function() {
+            var stateKey, eventKey, keys = {
+                hidden: 'visibilitychange',
+                webkitHidden: 'webkitvisibilitychange',
+                mozHidden: 'mozvisibilitychange',
+                msHidden: 'msvisibilitychange'
+            };
+            for (stateKey in keys) {
+                if (stateKey in document) {
+                    eventKey = keys[stateKey];
+                    break;
+                }
+            }
+            return function(c) {
+                if (c) document.addEventListener(eventKey, c);
+                return !document[stateKey];
+            }
+        }()
+
         function displayError(message) {
-            $('#error').css('display', 'block').text('ERROR: ' + message);
+            $('#error').css('display', 'block').text('Error: ' + message);
             console.error(message);
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                let j = Math.floor(Math.random() * (i + 1));
+                let temp = array[i];
+                array[i] = array[j];
+                array[j] = temp;
+            }
+        }
+
+        function setPhoto(dbx, elementSelector, index, uncachePrevious) {
+
+            /* console.log('============ setPhoto %s %s %s ============', elementSelector, index, uncachePrevious);
+            console.log('dropboxPhotoPaths:', dropboxPhotoPaths);
+            console.log('photoCache:', photoCache); */
+
+            $('#error').css('display', 'hidden').text('');
+
+            let previousIndex = index - 1;
+            if (previousIndex < 0) {
+                previousIndex = dropboxPhotoPaths.length - 1;
+            }
+
+            if (photoCache[index] != '') {
+                $(elementSelector).css('background-image', 'url(' + photoCache[index] + ')');
+                if (uncachePrevious) {
+                    URL.revokeObjectURL(photoCache[previousIndex]);
+                    photoCache[previousIndex] = '';
+                }
+            } else {
+                dbx.filesDownload({path: dropboxPhotoPaths[index]})
+                .then(function(response) {
+                    if (uncachePrevious) {
+                        URL.revokeObjectURL(photoCache[previousIndex]);
+                        photoCache[previousIndex] = '';
+                    }
+                    photoCache[index] = URL.createObjectURL(response.fileBlob);
+                    $(elementSelector).css('background-image', 'url(' + photoCache[index] + ')');
+                }).catch(function(error) {
+                    displayError('Unable to get photo ' + dropboxPhotoPaths[index] + ': ' + error);
+                });
+            }
+        }
+
+        function slideshowStep(dbx, wasVisible) {
+            if (!isVisible()) {
+                // Check back later if visible
+                setTimeout(function() {slideshowStep(dbx, false);}, slideshowTimeSeconds * 1000);
+                return;
+            }
+            if (wasVisible == false) {
+                // Back from invisible: keep current & next but reshuffle the rest
+                let nextPhotoIndex = currentPhotoIndex + 1;
+                if (dropboxPhotoPaths.length <= nextPhotoIndex) {
+                    nextPhotoIndex = 0;
+                }
+
+                // save state
+                const currentPhotoPath = dropboxPhotoPaths[currentPhotoIndex];
+                const currentPhotoUrl = photoCache[currentPhotoIndex];
+                const nextPhotoPath = dropboxPhotoPaths[nextPhotoIndex];
+                const nextPhotoUrl = photoCache[nextPhotoIndex];
+                dropboxPhotoPaths.splice(dropboxPhotoPaths.indexOf(currentPhotoPath), 1);
+                dropboxPhotoPaths.splice(dropboxPhotoPaths.indexOf(nextPhotoPath), 1);
+                photoCache.splice(photoCache.indexOf(currentPhotoUrl), 1);
+                photoCache.splice(photoCache.indexOf(nextPhotoUrl), 1);
+
+                // recreate
+                currentPhotoIndex = 0;
+                shuffleArray(dropboxPhotoPaths);
+                dropboxPhotoPaths.unshift(currentPhotoPath, nextPhotoPath);
+                photoCache = []
+                dropboxPhotoPaths.forEach(function() {
+                    photoCache.push('');
+                });
+                photoCache[0] = currentPhotoUrl;
+                photoCache[1] = nextPhotoUrl;
+
+                // done!
+                setTimeout(function() {slideshowStep(dbx, true);}, slideshowTimeSeconds * 1000);
+                return;
+            }
+
+            // Set photo
+            if (dropboxPhotoPaths.length <= currentPhotoIndex) {
+                currentPhotoIndex = 0;
+            }
+            setPhoto(dbx, '#slideshow', currentPhotoIndex, true);
+            currentPhotoIndex += 1;
+
+            // Preload next photo
+            let nextPhotoIndex = currentPhotoIndex;
+            if (dropboxPhotoPaths.length <= nextPhotoIndex) {
+                nextPhotoIndex = 0;
+            }
+            setPhoto(dbx, '#prefetch', nextPhotoIndex, false);
+
+            setTimeout(function() {slideshowStep(dbx, true);}, slideshowTimeSeconds * 1000);
+        }
+
+        function startSlideshow(dbx) {
+            if (dropboxPhotoPaths.length == 0) {
+                displayError('Album is empty');
+                return;
+            }
+            shuffleArray(dropboxPhotoPaths);
+            // Init cache
+            dropboxPhotoPaths.forEach(function() {
+                photoCache.push('');
+            });
+            slideshowStep(dbx, true);
         }
 
         function getQueryVariable(variable, defaultValue) {
@@ -62,111 +209,125 @@
             return defaultValue;
         }
 
-        function setTTLCache(key, value) {
-            const object = {
-                value: value,
-                timestamp: new Date().getTime(),
-            }
-            localStorage.setItem(key, JSON.stringify(object));
-        }
+        function parseQueryString(str) {
+            var ret = Object.create(null);
 
-        function getTTLCache(key, ttlSeconds) {
-            const rawObject = localStorage.getItem(key);
-            if (rawObject === null) {
-                return null;
+            if (typeof str !== 'string') {
+                return ret;
             }
-            const object = JSON.parse(rawObject);
-            if (typeof ttlSeconds !== 'undefined') {
-                const now = new Date().getTime();
-                if (now > object.timestamp + ttlSeconds * 1000) {
-                    return null;
+
+            str = str.trim().replace(/^(\?|#|&)/, '');
+
+            if (!str) {
+                return ret;
+            }
+
+            str.split('&').forEach(function (param) {
+                var parts = param.replace(/\+/g, ' ').split('=');
+                // Firefox (pre 40) decodes `%3D` to `=`
+                // https://github.com/sindresorhus/query-string/pull/37
+                var key = parts.shift();
+                var val = parts.length > 0 ? parts.join('=') : undefined;
+
+                key = decodeURIComponent(key);
+
+                // missing `=` should be `null`:
+                // http://w3.org/TR/2012/WD-url-20120524/#collect-url-parameters
+                val = val === undefined ? null : decodeURIComponent(val);
+
+                if (ret[key] === undefined) {
+                    ret[key] = val;
+                } else if (Array.isArray(ret[key])) {
+                    ret[key].push(val);
+                } else {
+                    ret[key] = [ret[key], val];
                 }
-            }
-            return object.value;
+            });
+
+            return ret;
         }
 
-        function getAlbumPhotoURLs(clientId, albumHash, albumCacheTimeSeconds) {
-            const cache = getTTLCache('getAlbumPhotoURLs-' + albumHash, albumCacheTimeSeconds);
-            if (cache) {
-                console.info('getAlbumPhotoURLs cached result:', cache);
-                photos = cache;
-                startSlideshow();
-            } else {
-                $.ajax({
-                    url: 'https://api.imgur.com/3/album/' + albumHash + '/images',
-                    beforeSend: function (jqXHR, settings) {
-                        jqXHR.setRequestHeader('Authorization', 'Client-ID ' + clientId);
-                    },
-                    success: function(result) {
-                        photos = [];
-                        result.data.forEach(function(item) {
-                            photos.push(item.link);
-                        });
-                        console.info('getAlbumPhotoURLs result:', photos);
-                        setTTLCache('getAlbumPhotoURLs-' + albumHash, photos);
-                        startSlideshow();
-                    },
-                    error: function(xhr, status, error) {
-                        if (xhr.status == 404) {
-                            error = 'not found';
-                        }
-                        displayError('failed to retrieve albumHash ' + albumHash + ': ' + error);
-                    },
+        function getAccessTokenFromUrl() {
+            return parseQueryString(window.location.hash).access_token;
+        }
+
+        function isAuthenticated() {
+            return !!getAccessTokenFromUrl();
+        }
+
+        function getAvailableAlbums(dbx) {
+            dbx.filesListFolder({path: ''})
+            .then(function(response) {
+                albumNames = [];
+                response.entries.forEach(function(item) {
+                    albumNames.push(item.name);
                 });
-            }
+                showAlbums();
+            }).catch(function(error) {
+                displayError('Unable to list albums: ' + error.error);
+            });
         }
 
-        function shuffleArray(array) {
-            for (let i = array.length - 1; i > 0; i--) {
-                let j = Math.floor(Math.random() * (i + 1));
-                let temp = array[i];
-                array[i] = array[j];
-                array[j] = temp;
-            }
+        function showAlbums() {
+            $('#albums').css('display', 'block');
+            $('#albumList').html('');  // reset
+            albumNames.forEach(function(albumName) {
+                let albumURL = new URL(document.location);
+                albumURL.search = '?slideshowTimeSeconds=' + slideshowTimeSeconds + '&albumName=' + albumName;
+                const $a = $('<a>').attr('href', albumURL.href).text(albumName);
+                const $li = $('<li>').append($a);
+                $('#albumList').append($li);
+            });
         }
 
-        const clientId = getQueryVariable('clientId', 'de79b36c22915ea');
-        const albumHash = getQueryVariable('albumHash', '');
-        const albumCacheTimeSeconds = parseInt(getQueryVariable('albumCacheTimeSeconds', '60'));
-        const slideshowTimeSeconds = parseInt(getQueryVariable('slideshowTimeSeconds', '10'));
-
-        var photos = [];
-        var currentPhotoIndex = 0;
-
-        function slideshowStep() {
-            if (photos.length <= currentPhotoIndex) {
-                currentPhotoIndex = 0;
-            }
-            $('#slideshow').css('background-image', 'url("' + photos[currentPhotoIndex] + '")');
-            currentPhotoIndex += 1;
-
-            let nextPhotoIndex = currentPhotoIndex;
-            if (photos.length <= nextPhotoIndex) {
-                nextPhotoIndex = 0;
-            }
-            $('#prefetch').css('background-image', 'url("' + photos[nextPhotoIndex] + '")');
-            setTimeout(slideshowStep, slideshowTimeSeconds * 1000);
-        }
-
-        function startSlideshow() {
-            if (photos.length == 0) {
-                displayError('Album is empty');
-                return;
-            }
-            shuffleArray(photos);
-            slideshowStep();
+        function getPhotos(dbx, albumName) {
+            console.log('Get photos for albumName', albumName);
+            dbx.filesListFolder({path: '/' + albumName})
+            .then(function(response) {
+                response.entries.forEach(function(photo) {
+                    dropboxPhotoPaths.push(photo.path_lower);
+                });
+                startSlideshow(dbx);
+            }).catch(function(error) {
+                displayError('Unable to list album ' + albumName + ': ' + error.error);
+            });
         }
 
         $(function() {
-            getAlbumPhotoURLs(clientId, albumHash, albumCacheTimeSeconds);
+            $('#slideshowTimeSeconds').change(function() {
+                slideshowTimeSeconds = parseInt($(this).val());
+                showAlbums();  // refresh album URLs
+            });
+
+            if (isAuthenticated()) {
+                const dbx = new Dropbox.Dropbox({accessToken: getAccessTokenFromUrl()});
+                if (albumName.length > 0) {
+                    // We specified an album, start the slideshow
+                    getPhotos(dbx, albumName);
+                } else {
+                    // No album specified, show available directory
+                    getAvailableAlbums(dbx);
+                }
+            } else {
+                const dbx = new Dropbox.Dropbox({clientId: 'yttx8umg8miem6a'});
+                const authUrl = dbx.getAuthenticationUrl('https://mandibull.github.io/slideshow/index.html');
+                // const authUrl = dbx.getAuthenticationUrl('http://localhost:8000/index.html');
+                // Hard redirect if not authenticated
+                window.location.replace(authUrl);
+            }
         });
-    </script>
+    </script>    
 </head>
 
 <body>
     <div id="slideshow" class="slideshow"></div>
     <div id="prefetch" class="slideshow"></div>
     <div id="error"></div>
+    <div id="albums">
+        <p>Transition time (seconds) <input id="slideshowTimeSeconds" type="number" name="slideshowTimeSeconds" min="1" value="10"></p>
+        <p>Available albums:</p>
+        <ul id="albumList"></ul>
+    </div>
 </body>
 
 </html>
