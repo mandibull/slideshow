@@ -282,7 +282,7 @@
 
         function getPhotos(dbx, albumName) {
             console.log('Get photos for albumName', albumName);
-            dbx.filesListFolder({path: '/' + albumName})
+            dbx.filesListFolder({path: '/' + albumName, limit: 2000})
             .then(function(response) {
                 response.entries.forEach(function(photo) {
                     dropboxPhotoPaths.push(photo.path_lower);
