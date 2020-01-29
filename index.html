@@ -296,7 +296,7 @@
             });
 
             if (isAuthenticated()) {
-                const dbx = new Dropbox.Dropbox({accessToken: getAccessTokenFromUrl()});
+                const dbx = new Dropbox.Dropbox({fetch, accessToken: getAccessTokenFromUrl()});
                 if (albumName.length > 0) {
                     // We specified an album, start the slideshow
                     getPhotos(dbx, albumName);
