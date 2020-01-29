@@ -27,21 +27,6 @@
         #prefetch {
             display: none;
         }
-        #error {
-            display: none;
-            position: absolute;
-            max-width: 1000px;
-            min-height: 150px;
-            background-image: url("https://static-cdn.jtvnw.net/emoticons/v1/1339393/3.0");
-            background-repeat: no-repeat;
-            background-position: 15 18;
-            padding: 10px 30px 10px 155px;
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            -webkit-transform: translate(-50%, -50%);
-            transform: translate(-50%, -50%);
-        }
         #albums {
             display: none;
             position: absolute;
@@ -50,12 +35,27 @@
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+    <script src="https://browser.sentry-cdn.com/5.11.1/bundle.min.js" integrity="sha384-r7/ZcDRYpWjCNXLUKk3iuyyyEcDJ+o+3M5CqXP5GUGODYbolXewNHAZLYSJ3ZHcV" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dropbox.js/4.0.28/Dropbox-sdk.min.js"></script>
     <script>
         "use strict";
 
+        var slideshow_app_settings = {
+            environment: 'live',
+            dropboxAuthURL: 'https://mandibull.github.io/slideshow/index.html',
+            dropboxClientId: 'yttx8umg8miem6a',
+            sentryDsn: 'https://01ba605ec3424aee90b678ad2f04675d@sentry.io/2058555',
+            defaultSlideshowTimeSeconds: '10',
+        };
+
+        // Uncomment for dev
+        // slideshow_app_settings.environment = 'dev';
+        // slideshow_app_settings.dropboxAuthURL = 'http://localhost:8000/index.html';
+
+        Sentry.init({dsn: slideshow_app_settings.sentryDsn, environment: slideshow_app_settings.environment});
+
         const albumName = getQueryVariable('albumName', '');
-        var slideshowTimeSeconds = parseInt(getQueryVariable('slideshowTimeSeconds', '10'));
+        var slideshowTimeSeconds = parseInt(getQueryVariable('slideshowTimeSeconds', slideshow_app_settings.defaultSlideshowTimeSeconds));
         var albumNames = [];
         var dropboxPhotoPaths = [];
         var photoCache = [];
@@ -81,7 +81,6 @@
         }()
 
         function displayError(message) {
-            // $('#error').css('display', 'block').text('Error: ' + message);
             console.error(message);
         }
 
@@ -95,12 +94,6 @@
         }
 
         function setPhoto(dbx, elementSelector, index, uncachePrevious) {
-
-            /* console.log('============ setPhoto %s %s %s ============', elementSelector, index, uncachePrevious);
-            console.log('dropboxPhotoPaths:', dropboxPhotoPaths);
-            console.log('photoCache:', photoCache); */
-
-            $('#error').css('display', 'hidden').text('');
 
             let previousIndex = index - 1;
             if (previousIndex < 0) {
@@ -123,7 +116,8 @@
                     photoCache[index] = URL.createObjectURL(response.fileBlob);
                     $(elementSelector).css('background-image', 'url(' + photoCache[index] + ')');
                 }).catch(function(error) {
-                    displayError('Unable to get photo ' + dropboxPhotoPaths[index] + ': ' + error);
+                    Sentry.captureException(error.error);
+                    displayError('Unable to get photo ' + dropboxPhotoPaths[index] + ': ' + error.error);
                 });
             }
         }
@@ -264,6 +258,7 @@
                 });
                 showAlbums();
             }).catch(function(error) {
+                Sentry.captureException(error);
                 displayError('Unable to list albums: ' + error.error);
             });
         }
@@ -289,6 +284,7 @@
                 });
                 startSlideshow(dbx);
             }).catch(function(error) {
+                Sentry.captureException(error);
                 displayError('Unable to list album ' + albumName + ': ' + error.error);
             });
         }
@@ -309,9 +305,8 @@
                     getAvailableAlbums(dbx);
                 }
             } else {
-                const dbx = new Dropbox.Dropbox({clientId: 'yttx8umg8miem6a'});
-                const authUrl = dbx.getAuthenticationUrl('https://mandibull.github.io/slideshow/index.html');
-                // const authUrl = dbx.getAuthenticationUrl('http://localhost:8000/index.html');
+                const dbx = new Dropbox.Dropbox({clientId: slideshow_app_settings.dropboxClientId});
+                const authUrl = dbx.getAuthenticationUrl(slideshow_app_settings.dropboxAuthURL);
                 // Hard redirect if not authenticated
                 window.location.replace(authUrl);
             }
