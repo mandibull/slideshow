@@ -116,8 +116,8 @@
                     photoCache[index] = URL.createObjectURL(response.fileBlob);
                     $(elementSelector).css('background-image', 'url(' + photoCache[index] + ')');
                 }).catch(function(error) {
-                    Sentry.captureException(error.error);
-                    displayError('Unable to get photo ' + dropboxPhotoPaths[index] + ': ' + error.error);
+                    Sentry.captureException(error.error || error);
+                    displayError('Unable to get photo ' + dropboxPhotoPaths[index] + ': ' + (error.error || error));
                 });
             }
         }
@@ -258,8 +258,8 @@
                 });
                 showAlbums();
             }).catch(function(error) {
-                Sentry.captureException(error);
-                displayError('Unable to list albums: ' + error.error);
+                Sentry.captureException(error.error || error);
+                displayError('Unable to list albums: ' + (error.error || error));
             });
         }
 
@@ -284,8 +284,8 @@
                 });
                 startSlideshow(dbx);
             }).catch(function(error) {
-                Sentry.captureException(error);
-                displayError('Unable to list album ' + albumName + ': ' + error.error);
+                Sentry.captureException(error.error || error);
+                displayError('Unable to list album ' + albumName + ': ' + (error.error || error));
             });
         }
 
