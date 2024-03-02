@@ -53,12 +53,12 @@
             sentryDsn: 'https://01ba605ec3424aee90b678ad2f04675d@sentry.io/2058555',
             defaultSlideshowTimeSeconds: '10',
             dropboxClientId: 'yttx8umg8miem6a',
-            dropboxRedirectUri: 'https://mandibull.github.io/slideshow/index.html',
+            dropboxRedirectUri: 'https://mandibull.github.io/slideshow/v2/index.html',
         };
 
         // Uncomment for dev
-        slideshow_app_settings.environment = 'dev';
-        slideshow_app_settings.dropboxRedirectUri = 'http://localhost:8000/index.html';
+        // slideshow_app_settings.environment = 'dev';
+        // slideshow_app_settings.dropboxRedirectUri = 'http://localhost:8000/v2/index.html';
 
         Sentry?.init({dsn: slideshow_app_settings.sentryDsn, environment: slideshow_app_settings.environment});
 
