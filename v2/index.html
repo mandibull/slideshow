@@ -1,0 +1,414 @@
+<!doctype html>
+<html>
+
+<head>
+    <title>Mandibull Slideshow</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <meta charset="UTF-8">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: Arial, Helvetica, sans-serif;
+            color: white;
+            font-size: 25px;
+        }
+        .slideshow {
+            position: absolute;
+            display: block;
+            background: #000000;
+            height: 100%;
+            width: 100%;
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
+        }
+        #prefetch {
+            display: none;
+        }
+        #albums {
+            display: none;
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <script>let Sentry = null;</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js" integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://browser.sentry-cdn.com/5.11.1/bundle.min.js" integrity="sha384-r7/ZcDRYpWjCNXLUKk3iuyyyEcDJ+o+3M5CqXP5GUGODYbolXewNHAZLYSJ3ZHcV" crossorigin="anonymous"></script>
+    <!--script src="https://browser.sentry-cdn.com/7.102.1/bundle.tracing.min.js" integrity="sha384-GAojj4Ei4oTfP03Sqe6GqPEStZjif7HTFbhM83bSTTPcYrss5jO0+M/0LKaLYeUA" crossorigin="anonymous"></script-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dropbox.js/10.34.0/Dropbox-sdk.min.js" integrity="sha512-PTKs+sPreCz6TLyLj9CYx3LxxPZmY5k1k5Yb5Y5mUQzngf/XUxNdtyWwYjcPcOZJm4wSYiicZr0kotLmDIRFmQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+        /* useful links:
+        https://github.com/dropbox/dropbox-sdk-js/blob/main/examples/javascript/pkce-browser/index.html
+        https://www.dropbox.com/developers/documentation/http/documentation
+        https://dropbox.github.io/dropbox-sdk-js/global.html#getAuthenticationUrl__anchor
+        https://www.dropbox.com/developers/apps/info/yttx8umg8miem6a#permissions
+        */
+        "use strict";
+
+        let slideshow_app_settings = {
+            environment: 'live',
+            sentryDsn: 'https://01ba605ec3424aee90b678ad2f04675d@sentry.io/2058555',
+            defaultSlideshowTimeSeconds: '10',
+            dropboxClientId: 'yttx8umg8miem6a',
+            dropboxRedirectUri: 'https://mandibull.github.io/slideshow/index.html',
+        };
+
+        // Uncomment for dev
+        slideshow_app_settings.environment = 'dev';
+        slideshow_app_settings.dropboxRedirectUri = 'http://localhost:8000/index.html';
+
+        Sentry?.init({dsn: slideshow_app_settings.sentryDsn, environment: slideshow_app_settings.environment});
+
+        const albumName = getQueryVariable('albumName', '');
+        let slideshowTimeSeconds = parseInt(getQueryVariable('slideshowTimeSeconds', slideshow_app_settings.defaultSlideshowTimeSeconds));
+        let albumNames = [];
+        let dropboxPhotoPaths = [];
+        let photoCache = [];
+        let currentPhotoIndex = 0;
+
+        const isVisible = function() {
+            let stateKey, eventKey, keys = {
+                hidden: 'visibilitychange',
+                webkitHidden: 'webkitvisibilitychange',
+                mozHidden: 'mozvisibilitychange',
+                msHidden: 'msvisibilitychange'
+            };
+            for (stateKey in keys) {
+                if (stateKey in document) {
+                    eventKey = keys[stateKey];
+                    break;
+                }
+            }
+            return function(c) {
+                if (c) document.addEventListener(eventKey, c);
+                return !document[stateKey];
+            }
+        }()
+
+        function displayError(message) {
+            // TODO: refactor this
+            console.error(message);
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                let j = Math.floor(Math.random() * (i + 1));
+                let temp = array[i];
+                array[i] = array[j];
+                array[j] = temp;
+            }
+        }
+
+        function setPhoto(dbxAuth, elementSelector, index, uncachePrevious) {
+
+            let previousIndex = index - 1;
+            if (previousIndex < 0) {
+                previousIndex = dropboxPhotoPaths.length - 1;
+            }
+
+            if (photoCache[index] != '') {
+                $(elementSelector).css('background-image', 'url(' + photoCache[index] + ')');
+                if (uncachePrevious) {
+                    URL.revokeObjectURL(photoCache[previousIndex]);
+                    photoCache[previousIndex] = '';
+                }
+            } else {
+                checkAndRefreshAccessToken(dbxAuth, () => {
+                    let dbx = new Dropbox.Dropbox({auth: dbxAuth});
+                    dbx.filesDownload({path: dropboxPhotoPaths[index]})
+                        .then((response) => {
+                            if (uncachePrevious) {
+                                URL.revokeObjectURL(photoCache[previousIndex]);
+                                photoCache[previousIndex] = '';
+                            }
+                            photoCache[index] = URL.createObjectURL(response.result.fileBlob);
+                            $(elementSelector).css('background-image', 'url(' + photoCache[index] + ')');
+                        }).catch((error) => {
+                            Sentry?.captureException(error.error || error);
+                            displayError('Unable to get photo ' + dropboxPhotoPaths[index] + ': ' + (error.error || error));
+                        });
+                });
+            }
+        }
+
+        function slideshowStep(dbxAuth, wasVisible) {
+            if (!isVisible()) {
+                // Check back later if visible
+                setTimeout(function() {slideshowStep(dbxAuth, false);}, slideshowTimeSeconds * 1000);
+                return;
+            }
+            if (wasVisible == false) {
+                // Back from invisible: keep current & next but reshuffle the rest
+                let nextPhotoIndex = currentPhotoIndex + 1;
+                if (dropboxPhotoPaths.length <= nextPhotoIndex) {
+                    nextPhotoIndex = 0;
+                }
+
+                // save state
+                const currentPhotoPath = dropboxPhotoPaths[currentPhotoIndex];
+                const currentPhotoUrl = photoCache[currentPhotoIndex];
+                const nextPhotoPath = dropboxPhotoPaths[nextPhotoIndex];
+                const nextPhotoUrl = photoCache[nextPhotoIndex];
+                dropboxPhotoPaths.splice(dropboxPhotoPaths.indexOf(currentPhotoPath), 1);
+                dropboxPhotoPaths.splice(dropboxPhotoPaths.indexOf(nextPhotoPath), 1);
+                photoCache.splice(photoCache.indexOf(currentPhotoUrl), 1);
+                photoCache.splice(photoCache.indexOf(nextPhotoUrl), 1);
+
+                // recreate
+                currentPhotoIndex = 0;
+                shuffleArray(dropboxPhotoPaths);
+                dropboxPhotoPaths.unshift(currentPhotoPath, nextPhotoPath);
+                photoCache = []
+                dropboxPhotoPaths.forEach(function() {
+                    photoCache.push('');
+                });
+                photoCache[0] = currentPhotoUrl;
+                photoCache[1] = nextPhotoUrl;
+
+                // done!
+                setTimeout(function() {slideshowStep(dbxAuth, true);}, slideshowTimeSeconds * 1000);
+                return;
+            }
+
+            // Set photo
+            if (dropboxPhotoPaths.length <= currentPhotoIndex) {
+                currentPhotoIndex = 0;
+            }
+            setPhoto(dbxAuth, '#slideshow', currentPhotoIndex, true);
+            currentPhotoIndex += 1;
+
+            // Preload next photo
+            let nextPhotoIndex = currentPhotoIndex;
+            if (dropboxPhotoPaths.length <= nextPhotoIndex) {
+                nextPhotoIndex = 0;
+            }
+            setPhoto(dbxAuth, '#prefetch', nextPhotoIndex, false);
+
+            setTimeout(function() {slideshowStep(dbxAuth, true);}, slideshowTimeSeconds * 1000);
+        }
+
+        function startSlideshow(dbxAuth) {
+            if (dropboxPhotoPaths.length == 0) {
+                displayError('Album is empty');
+                return;
+            }
+            shuffleArray(dropboxPhotoPaths);
+            // Init cache
+            dropboxPhotoPaths.forEach(function() {
+                photoCache.push('');
+            });
+            slideshowStep(dbxAuth, true);
+        }
+
+        function getQueryVariable(variable, defaultValue) {
+            let query = window.location.search.substring(1);
+            let vars = query.split('&');
+            for (let i = 0; i < vars.length; i++) {
+                let pair = vars[i].split('=');
+                if (decodeURIComponent(pair[0]) == variable) {
+                    return decodeURIComponent(pair[1]);
+                }
+            }
+            return defaultValue;
+        }
+
+        function parseQueryString(str) {
+            let ret = Object.create(null);
+
+            if (typeof str !== 'string') {
+                return ret;
+            }
+
+            str = str.trim().replace(/^(\?|#|&)/, '');
+
+            if (!str) {
+                return ret;
+            }
+
+            str.split('&').forEach(function (param) {
+                let parts = param.replace(/\+/g, ' ').split('=');
+                // Firefox (pre 40) decodes `%3D` to `=`
+                // https://github.com/sindresorhus/query-string/pull/37
+                let key = parts.shift();
+                let val = parts.length > 0 ? parts.join('=') : undefined;
+
+                key = decodeURIComponent(key);
+
+                // missing `=` should be `null`:
+                // http://w3.org/TR/2012/WD-url-20120524/#collect-url-parameters
+                val = val === undefined ? null : decodeURIComponent(val);
+
+                if (ret[key] === undefined) {
+                    ret[key] = val;
+                } else if (Array.isArray(ret[key])) {
+                    ret[key].push(val);
+                } else {
+                    ret[key] = [ret[key], val];
+                }
+            });
+
+            return ret;
+        }
+
+        function getCodeFromUrl() {
+            return parseQueryString(window.location.search).code;
+        }
+
+        function hasCodeInUrl() {
+            return !!getCodeFromUrl();
+        }
+
+        function getAccessTokenFromUrl() {
+            return parseQueryString(window.location.hash).access_token;
+        }
+
+        function hasAccessTokenInUrl() {
+            return !!getAccessTokenFromUrl();
+        }
+
+        function checkAndRefreshAccessToken(dbxAuth, callback)
+        {
+            dbxAuth.checkAndRefreshAccessToken()
+                .then(() => {
+                    const expiresAt = Math.floor(dbxAuth.getAccessTokenExpiresAt() / 1000);
+                    window.location.hash = `access_token=${dbxAuth.getAccessToken()}&refresh_token=${dbxAuth.getRefreshToken()}&expires_at=${expiresAt}`;
+                    callback();
+                })
+                .catch((error) => {
+                    console.error('checkAndRefreshAccessToken failure');
+                    console.dir(error);
+                });
+        }
+
+        function getAvailableAlbums(dbxAuth) {
+            let dbx = new Dropbox.Dropbox({auth: dbxAuth});
+            dbx.filesListFolder({path: ''})
+            .then((response) => {
+                albumNames = [];
+                response.result.entries.forEach(function(item) {
+                    albumNames.push(item.name);
+                });
+                showAlbums(dbx);
+            }).catch((error) => {
+                Sentry?.captureException(error.error || error);
+                console.error('Unable to list albums: ' + (error.error || error));
+            });
+        }
+
+        function showAlbums() {
+            $('#albums').css('display', 'block');
+            $('#albumList').html('');  // reset
+            albumNames.forEach((albumName) => {
+                let albumURL = new URL(document.location);
+                albumURL.search = '?slideshowTimeSeconds=' + slideshowTimeSeconds + '&albumName=' + albumName;
+                const $a = $('<a>').attr('target', '_blank').attr('href', albumURL.href).text(albumName);
+                const $li = $('<li>').append($a);
+                $('#albumList').append($li);
+            });
+        }
+
+        function getPhotos(dbxAuth, albumName) {
+            console.log('Get photos for albumName', albumName);
+            let dbx = new Dropbox.Dropbox({auth: dbxAuth});
+            dbx.filesListFolder({path: '/' + albumName, limit: 2000})
+            .then((response) => {
+                response.result.entries.forEach(function(photo) {
+                    dropboxPhotoPaths.push(photo.path_lower);
+                });
+                startSlideshow(dbxAuth);
+            }).catch((error) => {
+                Sentry?.captureException(error.error || error);
+                displayError('Unable to list album ' + albumName);
+                console.dir(error);
+            });
+        }
+
+        $(function() {
+            $('#slideshowTimeSeconds').change(function() {
+                slideshowTimeSeconds = parseInt($(this).val());
+                showAlbums();  // refresh album URLs
+            });
+
+            function slideshowMain(dbxAuth) {
+                if (albumName.length > 0) {
+                    // We specified an album, start the slideshow
+                    getPhotos(dbxAuth, albumName);
+                } else {
+                    // No album specified, show available directories
+                    getAvailableAlbums(dbxAuth);
+                }
+            };
+
+            if (hasAccessTokenInUrl()) {
+                // Third load: access token found, starting slideshow
+
+                const qs = parseQueryString(window.location.hash);
+
+                let dbxAuth = new Dropbox.DropboxAuth({
+                    clientId: slideshow_app_settings.dropboxClientId,
+                    accessTokenExpiresAt: new Date(parseInt(qs.expires_at || 0)),
+                    accessToken: qs.access_token,
+                    refreshToken: qs.refresh_token,
+                });
+                checkAndRefreshAccessToken(dbxAuth, () => {
+                    slideshowMain(dbxAuth);
+                });
+
+            } else if (hasCodeInUrl()) {
+                // Second load: code found, getting an access token
+
+                let dbxAuth = new Dropbox.DropboxAuth({clientId: slideshow_app_settings.dropboxClientId});
+                dbxAuth.setCodeVerifier(window.sessionStorage.getItem('codeVerifier'));
+                dbxAuth.getAccessTokenFromCode(slideshow_app_settings.dropboxRedirectUri, getCodeFromUrl())
+                    .then((response) => {
+                        const r = response.result;
+                        let expiresAt = Math.floor(Date.now() / 1000) + r.expires_in;
+                        // Add hash required for next step
+                        window.location.hash = `access_token=${r.access_token}}&refresh_token=${r.refresh_token}&expires_at=${expiresAt}`;
+                        // Remove query string with the already consumed code
+                        window.location.search = '';
+                        // Force page reload if the previous line didn't already
+                        window.location.reload();
+                    })
+                    .catch((error) => {
+                        Sentry?.captureException(error.error || error);
+                        console.error('getAccessTokenFromCode failure');
+                        console.dir(error);
+                    });
+
+            } else {
+                // First load: no token and no code, starting auth to get a code
+
+                let dbxAuth = new Dropbox.DropboxAuth({clientId: slideshow_app_settings.dropboxClientId});
+                dbxAuth.getAuthenticationUrl(slideshow_app_settings.dropboxRedirectUri, undefined, 'code', 'offline', undefined, undefined, true)
+                    .then((authUrl) => {
+                        window.sessionStorage.clear();
+                        window.sessionStorage.setItem("codeVerifier", dbxAuth.codeVerifier);
+                        window.location.href = authUrl;
+                    })
+                    .catch((error) => {
+                        Sentry?.captureException(error.error || error);
+                        console.error('getAuthenticationUrl failure');
+                        console.dir(error);
+                    });
+            }
+
+        });
+    </script>
+</head>
+
+<body>
+    <div id="slideshow" class="slideshow"></div>
+    <div id="prefetch" class="slideshow"></div>
+    <div id="error"></div>
+    <div id="albums">
+        <p>Transition time (seconds) <input id="slideshowTimeSeconds" type="number" name="slideshowTimeSeconds" min="1" value="10"></p>
+        <p>Available albums:</p>
+        <ul id="albumList"></ul>
+    </div>
+</body>
+
+</html>
